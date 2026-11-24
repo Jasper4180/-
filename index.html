@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#fff5f7">
+<title>LOVE 4 CUT｜遠端拍貼機</title>
+<style>
+:root{--pink:#e87998;--ink:#382b30;--muted:#8b737b;--paper:#fffaf9;--line:#f1dce2}
+*{box-sizing:border-box}body{margin:0;background:linear-gradient(140deg,#fff6f7,#fffaf3);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Noto Sans TC",sans-serif}
+main{max-width:900px;margin:auto;padding:24px 16px 40px}.brand{text-align:center;margin:8px 0 22px}.brand small{letter-spacing:.24em;color:var(--pink);font-weight:800}.brand h1{font-family:Georgia,serif;font-size:clamp(38px,8vw,58px);margin:6px 0 0;letter-spacing:.04em}.brand p{color:var(--muted);margin:6px 0}
+.panel{background:#ffffffd9;border:1px solid var(--line);border-radius:24px;padding:18px;margin:14px 0;box-shadow:0 10px 30px #8e53600d}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.row>*{flex:1;min-width:0}
+input,button,select{font:inherit;border-radius:14px;padding:13px 14px;border:1px solid var(--line);min-height:48px}
+input,select{background:white;color:var(--ink);width:100%}button{background:var(--pink);color:white;border:0;font-weight:750;cursor:pointer}button.secondary{background:#fff0f3;color:#a94e6b;border:1px solid var(--line)}button:disabled{opacity:.45;cursor:not-allowed}
+.status{font-size:14px;color:var(--muted);margin-top:10px;min-height:20px}.status strong{color:#a94e6b}
+.videos{display:grid;grid-template-columns:1fr 1fr;gap:12px}.video-wrap{background:#2d2227;border-radius:18px;overflow:hidden;position:relative;aspect-ratio:4/3}.video-wrap video{width:100%;height:100%;object-fit:cover;display:block}.tag{position:absolute;left:10px;top:10px;background:#fffE;color:#60434d;border-radius:30px;padding:5px 10px;font-size:12px;font-weight:700}
+.section-title{font-weight:800;margin:0 0 12px}.controls{display:flex;gap:10px;flex-wrap:wrap}.controls button{flex:1}.preview{display:block;width:min(100%,360px);margin:14px auto 0;border-radius:8px;box-shadow:0 8px 24px #5a27301c;background:white}
+.tiny{font-size:12px;color:var(--muted);line-height:1.6}.code{font-weight:900;letter-spacing:.18em;color:#a94e6b;font-size:22px}
+@media(max-width:560px){main{padding:16px 12px 28px}.panel{padding:14px;border-radius:20px}.videos{gap:8px}.video-wrap{aspect-ratio:3/4}.brand{margin-bottom:16px}}
+</style>
+</head>
+<body><main>
+<header class="brand"><small>THE ONLINE PHOTO BOOTH</small><h1>LOVE 4 CUT</h1><p>不在同一個地方，也能一起留下四格回憶 ♡</p></header>
+<section class="panel">
+  <p class="section-title">① 建立或加入拍貼房</p>
+  <div class="row"><input id="room" maxlength="8" placeholder="輸入朋友的房間碼（例如 LOVE24）" aria-label="房間碼"><button id="join">進入房間</button></div>
+  <div class="row" style="margin-top:10px"><button id="make" class="secondary">幫我產生房間碼</button><button id="copy" class="secondary" disabled>複製邀請資訊</button></div>
+  <div class="status" id="status" aria-live="polite">先建立房間，再把房間碼傳給朋友。兩人都要允許使用相機。</div>
+  <div id="roomLabel" class="code" aria-live="polite"></div>
+</section>
+<section class="panel">
+  <p class="section-title">② 連線畫面</p>
+  <div class="videos">
+    <div class="video-wrap"><video id="local" autoplay playsinline muted></video><span class="tag">你</span></div>
+    <div class="video-wrap"><video id="remote" autoplay playsinline></video><span class="tag">朋友</span></div>
+  </div>
+  <div class="tiny" style="margin-top:10px">提示：請在允許相機的安全連線網址（HTTPS）使用。若連線失敗，可能是網路或瀏覽器限制。</div>
+</section>
+<section class="panel">
+  <p class="section-title">③ 一起拍四格</p>
+  <div class="row"><select id="filter" aria-label="濾鏡"><option value="none">原色</option><option value="warm">暖暖日系</option><option value="mono">黑白底片</option><option value="pink">粉霧韓系</option></select><select id="frame" aria-label="相框"><option value="pink">櫻花粉相框</option><option value="cream">奶油白相框</option><option value="black">經典黑相框</option></select></div>
+  <div class="controls" style="margin-top:12px"><button id="shoot" disabled>開始同步拍攝</button><button id="download" class="secondary" disabled>下載四格照片</button></div>
+  <div class="status" id="shootStatus" aria-live="polite">兩人都連線後，就可以開始拍照。</div>
+  <canvas id="result" class="preview" width="600" height="1500" aria-label="拍貼成品預覽"></canvas>
+</section>
+<p class="tiny" style="text-align:center">LOVE 4 CUT · 私人房間最多 2 人。相機畫面會透過點對點連線傳送；請只與信任的朋友分享房間碼。</p>
+</main>
+<script>
+(() => {
+const $=id=>document.getElementById(id);
+const status=$("status"), shootStatus=$("shootStatus"), roomInput=$("room");
+let ws, pc, localStream, role=null, roomCode="", remoteReady=false, shotTimer=null, frames=[];
+const localVideo=$("local"), remoteVideo=$("remote"), canvas=$("result"), ctx=canvas.getContext("2d");
+const ice={iceServers:[{urls:"stun:stun.l.google.com:19302"}]};
+function say(t){status.textContent=t}
+function send(data){if(ws&&ws.readyState===WebSocket.OPEN)ws.send(JSON.stringify(data))}
+function roomMake(){const c=Math.random().toString(36).slice(2,8).toUpperCase();roomInput.value=c;return c}
+$("make").addEventListener("click",()=>{roomMake();say("房間碼已產生，按「進入房間」建立房間。")});
+$("copy").addEventListener("click",async()=>{const text=`我開了 LOVE 4 CUT 拍貼房，房間碼：${roomCode}。打開同一個拍貼網頁後輸入房間碼即可加入。`;try{await navigator.clipboard.writeText(text);say("邀請資訊已複製，傳給朋友吧！")}catch{say(text)}});
+function sendSignal(type,data={}){send({type,...data})}
+async function setupPeer(){
+  pc=new RTCPeerConnection(ice);
+  localStream.getTracks().forEach(t=>pc.addTrack(t,localStream));
+  pc.ontrack=e=>{remoteVideo.srcObject=e.streams[0];remoteReady=true;updateReady()};
+  pc.onicecandidate=e=>{if(e.candidate)sendSignal("candidate",{candidate:e.candidate})};
+  pc.onconnectionstatechange=()=>{if(pc.connectionState==="connected")say("兩人已成功連線！可以開始拍貼 ♡");else if(["failed","disconnected"].includes(pc.connectionState))say("連線中斷，請確認雙方網路後重新加入。");updateReady()};
+}
+function updateReady(){$("shoot").disabled=!(pc&&pc.connectionState==="connected"&&remoteReady)}
+async function connect(code){
+  if(!navigator.mediaDevices?.getUserMedia){say("此瀏覽器無法使用相機，請用最新版 Safari 或 Chrome，並使用 HTTPS 網址。");return}
+  try{
+    localStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"user",width:{ideal:1280},height:{ideal:960}},audio:false});
+    localVideo.srcObject=localStream;
+  }catch(e){say("無法開啟相機，請允許此網站使用相機後重試。");return}
+  roomCode=code.toUpperCase();$("roomLabel").textContent="ROOM · "+roomCode;
+  const proto=location.protocol==="https:"?"wss":"ws";
+  ws=new WebSocket(`${proto}://${location.host}`);
+  ws.onopen=()=>send({type:"join",room:roomCode});
+  ws.onmessage=async ev=>{
+    const m=JSON.parse(ev.data);
+    if(m.type==="error"){say(m.message);return}
+    if(m.type==="joined"){role=m.role;$("copy").disabled=false;say(role==="host"?"房間已建立！把房間碼傳給朋友，等他加入。":"已加入房間！正在連線…");await setupPeer();if(role==="guest")sendSignal("ready");}
+    if(m.type==="peer-joined"){say("朋友已進入房間，正在建立連線…");if(role==="host"&&pc){const offer=await pc.createOffer();await pc.setLocalDescription(offer);sendSignal("offer",{sdp:pc.localDescription})}}
+    if(m.type==="ready"&&role==="host"&&pc){const offer=await pc.createOffer();await pc.setLocalDescription(offer);sendSignal("offer",{sdp:pc.localDescription})}
+    if(m.type==="offer"){if(!pc)await setupPeer();await pc.setRemoteDescription(m.sdp);const answer=await pc.createAnswer();await pc.setLocalDescription(answer);sendSignal("answer",{sdp:pc.localDescription})}
+    if(m.type==="answer"&&pc)await pc.setRemoteDescription(m.sdp);
+    if(m.type==="candidate"&&pc&&m.candidate){try{await pc.addIceCandidate(m.candidate)}catch{}}
+    if(m.type==="peer-left"){remoteReady=false;remoteVideo.srcObject=null;say("朋友已離開房間。");updateReady()}
+    if(m.type==="countdown"&&role==="guest")startCountdown(false);
+    if(m.type==="capture"&&role==="guest")captureBoth();
+  };
+  ws.onclose=()=>say("連線已關閉。");
+}
+$("join").addEventListener("click",()=>{const c=roomInput.value.trim().toUpperCase();if(!c){say("請先輸入房間碼，或按產生房間碼。");return}if(ws)ws.close();connect(c)});
+function startCountdown(isHost){
+  let n=3;shootStatus.textContent="準備好！ "+n;
+  clearInterval(shotTimer);
+  shotTimer=setInterval(()=>{n--;if(n>0)shootStatus.textContent="準備好！ "+n;else{clearInterval(shotTimer);shootStatus.textContent="拍！";if(isHost){sendSignal("capture");captureBoth()}else captureBoth()}},1000);
+}
+$("shoot").addEventListener("click",()=>{if(role!=="host"){shootStatus.textContent="請由建立房間的人按下同步拍攝。";return}frames=[];sendSignal("countdown");startCountdown(true)});
+function captureBoth(){
+  if(!localVideo.videoWidth||!remoteVideo.videoWidth){shootStatus.textContent="朋友的畫面尚未準備好，請稍等。";return}
+  const filter=$("filter").value;
+  const fx=filter==="warm"?"sepia(.22) saturate(1.18)":filter==="mono"?"grayscale(1) contrast(1.08)":filter==="pink"?"saturate(.8) sepia(.12) brightness(1.06)":"none";
+  const snap=(video)=>{const c=document.createElement("canvas");c.width=600;c.height=450;const x=c.getContext("2d");x.filter=fx;const w=video.videoWidth,h=video.videoHeight,scale=Math.max(600/w,450/h),sw=600/scale,sh=450/scale;x.drawImage(video,(w-sw)/2,(h-sh)/2,sw,sh,0,0,600,450);x.filter="none";return c};
+  const a=snap(localVideo),b=snap(remoteVideo);frames.push([a,b]);
+  if(frames.length<4){shootStatus.textContent=`第 ${frames.length} 張完成，下一張準備中…`;setTimeout(()=>{if(role==="host"){sendSignal("countdown");startCountdown(true)}},900)}
+  else{renderStrip();shootStatus.textContent="完成！四格回憶已做好，按下載保存 ♡";$("download").disabled=false}
+}
+function renderStrip(){
+  const bg=$("frame").value==="cream"?"#fff8eb":$("frame").value==="black"?"#242124":"#f9dce5";
+  canvas.width=600;canvas.height=1500;ctx.fillStyle=bg;ctx.fillRect(0,0,600,1500);
+  ctx.fillStyle=$("frame").value==="black"?"#fff":"#5b3d48";ctx.textAlign="center";ctx.font="bold 34px Georgia";ctx.fillText("LOVE 4 CUT",300,55);
+  frames.forEach((pair,i)=>{const y=85+i*340;ctx.drawImage(pair[0],30,y,265,285);ctx.drawImage(pair[1],305,y,265,285);ctx.strokeStyle=$("frame").value==="black"?"#fff":"#fff";ctx.lineWidth=5;ctx.strokeRect(30,y,265,285);ctx.strokeRect(305,y,265,285)});
+  ctx.font="22px sans-serif";ctx.fillText("♡ TOGETHER, ANYWHERE ♡",300,1465);
+}
+$("download").addEventListener("click",()=>{const a=document.createElement("a");a.download="LOVE-4-CUT.png";a.href=canvas.toDataURL("image/png");a.click()});
+window.addEventListener("beforeunload",()=>{clearInterval(shotTimer);if(ws)ws.close();if(pc)pc.close();if(localStream)localStream.getTracks().forEach(t=>t.stop())});
+})();
+</script></body></html>
